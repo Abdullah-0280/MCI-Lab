@@ -98,9 +98,6 @@ int main(void)
   MX_USB_PCD_Init();
   /* USER CODE BEGIN 2 */
 
-
-  
-  
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -110,20 +107,25 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    //Task1
     int x = 42;
     float y = 3.14;
-    myPrintf ("Value of x = %d, y = %f \r\n", x, y);
+    myPrintf("Value of x = %d, y = %f \r\n", x, y);
 
     int a=10; int b=20;
 
+
+    //Task2
     int lhs=(a+b)*(a+b);
     int rhs= a*a + b*b + 2*a*b;
     myPrintf("LHS=%d, RHS=%d",lhs,rhs);
     HAL_Delay(100);
 
+
+    //Task3
     char str[] = "Microcontrollers";
     int key=1000;
-    for (int i=0; i<strlen(str);i++) {
+    for (int i=0; i< strlen(str);i++) {
       str[i]=str[i] + (key%256);
     }
     myPrintf("Encrypted string: ",str);
@@ -133,6 +135,92 @@ int main(void)
     }
     myPrintf("Decrypted String: ",str);
     HAL_Delay(100);
+
+
+
+    //Task4
+
+    int A[2][2] = {
+        {1, 2},
+        {3, 4}
+    };
+
+    int B[2][2] = {
+        {5, 6},
+        {7, 8}
+    };
+
+    int C[2][2];
+
+    for (int i = 0; i < 2; i++)
+    {
+        for (int j = 0; j < 2; j++)
+        {
+            C[i][j] = 0;
+            for (int k = 0; k < 2; k++)
+            {
+                C[i][j] += A[i][k] * B[k][j];
+            }
+        }
+    }
+
+    myPrintf("Matrix A:\r\n");
+    for (int i = 0; i < 2; i++)
+    {
+        for (int j = 0; j < 2; j++)
+        {
+            myPrintf("%d ", A[i][j]);
+        }
+        myPrintf("\r\n");
+    }
+
+    myPrintf("Matrix B:\r\n");
+    for (int i = 0; i < 2; i++)
+    {
+        for (int j = 0; j < 2; j++)
+        {
+            myPrintf("%d ", B[i][j]);
+        }
+        myPrintf("\r\n");
+    }
+
+    myPrintf("Matrix C (A*B):\r\n");
+    for (int i = 0; i < 2; i++)
+    {
+        for (int j = 0; j < 2; j++)
+        {
+            myPrintf("%d ", C[i][j]);
+        }
+        myPrintf("\r\n");
+    }
+
+    HAL_Delay(2000);
+
+
+
+    //Task5
+    myPrintf("Armstrong Numbers between 100 and 999:\r\n");
+
+    for (int num = 100; num <= 999; num++)
+    {
+        int temp = num;
+        int sum = 0;
+
+        while (temp > 0)
+        {
+            int digit = temp % 10;
+            sum += digit * digit * digit;
+            temp /= 10;
+        }
+
+        if (sum == num)
+        {
+            myPrintf("%d\r\n", num);
+        }
+    }
+
+    HAL_Delay(3000);   
+
   }
   /* USER CODE END 3 */
 }
