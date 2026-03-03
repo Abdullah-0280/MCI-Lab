@@ -18,10 +18,10 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stdio.h"
 #include "stm32f303xc.h"
 #include "stm32f3xx_hal_i2c.h"
 #include <stdint.h>
+#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -68,6 +68,15 @@ static void MX_USB_PCD_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+uint8_t fetchDeviceIdentifier(uint8_t regAddr) {
+    uint8_t dataBuffer;
+    const uint8_t slaveAddr = 0x33;
+    const uint8_t regAddress = 0x0F;
+    
+    HAL_I2C_Mem_Read(&hi2c1, slaveAddr, regAddress, I2C_MEMADDR_SIZE_8BIT, 
+                     &dataBuffer, 1, HAL_MAX_DELAY);
+    return dataBuffer;
+}
 /* USER CODE END 0 */
 
 /**
@@ -112,13 +121,20 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    uint8_t rx;
-    HAL_I2C_Mem_Read(&hi2c1, 0x33, 0x0F, 1, &rx, 1, HAL_MAX_DELAY);
-    char msg[30];
-    int len = snprintf(msg, sizeof(msg), "WHOAMI: %d\r\n", rx);
-    HAL_UART_Transmit(&huart2, (uint8_t *)msg, len, HAL_MAX_DELAY);
-    HAL_Delay(1000);
-
+    uint8_t registerAddr = 0x0F;
+    uint8_t sensorValue = fetchDeviceIdentifier(registerAddr);
+    
+    char hexOutput[5];
+    hexOutput[0] = '0';
+    hexOutput[1] = 'x';
+    hexOutput[2] = (sensorValue >> 4 < 10) ? ('0' + (sensorValue >> 4)) : ('A' + (sensorValue >> 4) - 10);
+    hexOutput[3] = ((sensorValue & 0x0F) < 10) ? ('0' + (sensorValue & 0x0F)) : ('A' + (sensorValue & 0x0F) - 10);
+    hexOutput[4] = '\0';
+    
+    HAL_UART_Transmit(&huart2, (uint8_t *)hexOutput, 4, HAL_MAX_DELAY);
+    
+    uint8_t newLine[] = {0x0D, 0x0A};
+    HAL_UART_Transmit(&huart2, newLine, 2, HAL_MAX_DELAY);
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */

@@ -4,24 +4,13 @@
   * @file           : main.c
   * @brief          : Main program body
   ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stdio.h"
-#include "stm32f303xc.h"
-#include "stm32f3xx_hal_i2c.h"
-#include <stdint.h>
+#include "stdarg.h"
+#include <stdio.h>
+#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -30,12 +19,31 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+    // Accelerometer (LSM303AGR) - X axis only
+    int16_t acc_raw_x;
+    float acc_x;
+    float acc_x_offset;
+    
+    // Gyroscope (L3GD20) - X axis only
+    int16_t gyro_raw_x;
+    float gyro_x;
+    float gyro_x_offset;
+} SensorData;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+// LSM303AGR Defines
+#define LSM_ADDR_WRITE  0x32
+#define LSM_ADDR_READ   0x33
+#define CTRL_REG1_A     0x20
+#define CTRL_REG4_A     0x23
+#define OUT_X_L_A       0x28
 
+// L3GD20 Defines
+#define GYRO_CTRL_REG1  0x20
+#define GYRO_OUT_X_L    0x28
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,7 +61,7 @@ UART_HandleTypeDef huart2;
 PCD_HandleTypeDef hpcd_USB_FS;
 
 /* USER CODE BEGIN PV */
-
+SensorData sensor = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -64,10 +72,114 @@ static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_USB_PCD_Init(void);
 /* USER CODE BEGIN PFP */
+void Init_LSM(void);
+void Init_Gyro(void);
+void Read_LSM(void);
+void Read_Gyro(void);
+void Offset_Sensors(void);
+void Print_Sensors(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void Init_LSM(void) {
+    uint8_t data;
+    // Wake up, 100Hz data rate, all axes enabled
+    data = 0x67; 
+    HAL_I2C_Mem_Write(&hi2c1, LSM_ADDR_WRITE, CTRL_REG1_A, 1, &data, 1, HAL_MAX_DELAY);
+    
+    // Normal mode, High resolution disabled, continuous update
+    data = 0x00; 
+    HAL_I2C_Mem_Write(&hi2c1, LSM_ADDR_WRITE, CTRL_REG4_A, 1, &data, 1, HAL_MAX_DELAY);
+}
+
+void Init_Gyro(void) {
+    // Enable X, Y, Z axes, Power ON, 95Hz ODR
+    uint8_t tx[2] = {GYRO_CTRL_REG1, 0b10001111};
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+}
+
+void Read_LSM(void) {
+    uint8_t buffer[2];
+    // Read 2 bytes starting from OUT_X_L_A with auto-increment
+    HAL_I2C_Mem_Read(&hi2c1, LSM_ADDR_READ, OUT_X_L_A | 0x80, 1, buffer, 2, HAL_MAX_DELAY);
+
+    // Assemble 16-bit value from low byte first, then high byte
+    sensor.acc_raw_x = buffer[0] | (((uint16_t)buffer[1]) << 8);
+
+    // Convert to signed and apply scaling (3.9 mg/digit = 0.0039 g/digit)
+    const float accel_scale = 0.0039f;
+    sensor.acc_x = ((float)(int16_t)sensor.acc_raw_x) * accel_scale - sensor.acc_x_offset;
+}
+
+void Read_Gyro(void) {
+    uint8_t read_command = GYRO_OUT_X_L | 0xC0;  // Combined read and auto-increment flags
+    uint8_t gyro_data[2] = {0};
+
+    // SPI transaction: pull CS low, transmit command, receive data, release CS
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, &read_command, 1, HAL_MAX_DELAY);
+    HAL_SPI_Receive(&hspi1, gyro_data, 2, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+
+    // Reconstruct 16-bit signed value: LSB first, then MSB
+    sensor.gyro_raw_x = gyro_data[0] | (((uint16_t)gyro_data[1]) << 8);
+
+    // Apply sensitivity scaling: 0.00875 degrees/second per digit
+    const float gyro_scale = 0.00875f;
+    sensor.gyro_x = ((float)(int16_t)sensor.gyro_raw_x) * gyro_scale - sensor.gyro_x_offset;
+}
+
+void Offset_Sensors(void) {
+    const int calibration_samples = 20;
+    const float calibration_factor = 1.0f / calibration_samples;
+    
+    // Initialize running averages
+    float avg_ax = 0;
+    float avg_gx = 0;
+
+    // Clear existing offsets
+    sensor.acc_x_offset = 0;
+    sensor.gyro_x_offset = 0;
+
+    for (int sample_idx = 1; sample_idx <= calibration_samples; sample_idx++) {
+        Read_LSM();
+        Read_Gyro();
+
+        // Cumulative running average approach
+        avg_ax += sensor.acc_x * calibration_factor;
+        avg_gx += sensor.gyro_x * calibration_factor;
+
+        HAL_Delay(10);
+    }
+
+    sensor.acc_x_offset = avg_ax;
+    sensor.gyro_x_offset = avg_gx;
+}
+
+void Print_Sensors(void) {
+    char buf[64];
+    
+    // Alternative approach: scale values by 100 first, then process
+    int ax_scaled = (int)(sensor.acc_x * 100.0f);
+    int gx_scaled = (int)(sensor.gyro_x * 100.0f);
+    
+    // Extract integer and fractional parts using division and modulo
+    int ax_i = ax_scaled / 100;
+    int ax_f = ax_scaled % 100;
+    if(ax_f < 0) ax_f = -ax_f;
+    
+    int gx_i = gx_scaled / 100;
+    int gx_f = gx_scaled % 100;
+    if(gx_f < 0) gx_f = -gx_f;
+
+    snprintf(buf, sizeof(buf), "%d.%02d,%d.%02d\r\n",
+    ax_i, ax_f, gx_i, gx_f);
+    HAL_UART_Transmit(&huart2, (uint8_t*)buf, strlen(buf), HAL_MAX_DELAY);
+}
 /* USER CODE END 0 */
 
 /**
@@ -104,20 +216,24 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USB_PCD_Init();
   /* USER CODE BEGIN 2 */
-
+  Init_LSM();
+  Init_Gyro();
+  
+  // Wait a moment for sensors to stabilize before calibration
+  HAL_Delay(500); 
+  Offset_Sensors();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      Read_LSM();
+      Read_Gyro();
+      Print_Sensors();
+      
+      HAL_Delay(100);
     /* USER CODE END WHILE */
-    uint8_t rx;
-    HAL_I2C_Mem_Read(&hi2c1, 0x33, 0x0F, 1, &rx, 1, HAL_MAX_DELAY);
-    char msg[30];
-    int len = snprintf(msg, sizeof(msg), "WHOAMI: %d\r\n", rx);
-    HAL_UART_Transmit(&huart2, (uint8_t *)msg, len, HAL_MAX_DELAY);
-    HAL_Delay(1000);
 
     /* USER CODE BEGIN 3 */
   }
@@ -163,9 +279,9 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB|RCC_PERIPHCLK_USART1
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB|RCC_PERIPHCLK_USART2
                               |RCC_PERIPHCLK_I2C1;
-  PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK2;
+  PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
   PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
   PeriphClkInit.USBClockSelection = RCC_USBCLKSOURCE_PLL;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
@@ -241,17 +357,17 @@ static void MX_SPI1_Init(void)
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi1.Init.CRCPolynomial = 7;
   hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
   if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
@@ -263,20 +379,20 @@ static void MX_SPI1_Init(void)
 }
 
 /**
-  * @brief USART1 Initialization Function
+  * @brief USART2 Initialization Function
   * @param None
   * @retval None
   */
 static void MX_USART2_UART_Init(void)
 {
 
-  /* USER CODE BEGIN USART1_Init 0 */
+  /* USER CODE BEGIN USART2_Init 0 */
 
-  /* USER CODE END USART1_Init 0 */
+  /* USER CODE END USART2_Init 0 */
 
-  /* USER CODE BEGIN USART1_Init 1 */
+  /* USER CODE BEGIN USART2_Init 1 */
 
-  /* USER CODE END USART1_Init 1 */
+  /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
   huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
@@ -291,9 +407,9 @@ static void MX_USART2_UART_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART1_Init 2 */
+  /* USER CODE BEGIN USART2_Init 2 */
 
-  /* USER CODE END USART1_Init 2 */
+  /* USER CODE END USART2_Init 2 */
 
 }
 
