@@ -18,6 +18,13 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "stm32f3xx_hal_uart.h"
+
+#include <string.h>
+#include <stdlib.h>
+#include <sys/_intsup.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -65,7 +72,16 @@ static void MX_USB_PCD_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+void cout(const char* fmt, ...) {
+    char buffer[128]; 
+    va_list args;
+    va_start(args, fmt);
+    int l = vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    if (l > 0) {
+        HAL_UART_Transmit(&huart2, (uint8_t*)buffer, l, HAL_MAX_DELAY); 
+      }
+    }
 /* USER CODE END 0 */
 
 /**
@@ -102,6 +118,61 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USB_PCD_Init();
   /* USER CODE BEGIN 2 */
+  
+  
+
+
+  // if (arr != NULL) {
+  //   for(int i=0; i<a;i++) {
+  //     cout("%d/n",*(arr+i));
+  //   }
+  // }
+
+  
+    // Use the buffer ...
+  //free( buffer ); Always free dynamically allocated memory
+  // for (int i=0;i<a;i++) {
+  //   int msg = *(buffer+i);
+  //   HAL_UART_Transmit(&huart2, msg, strlen(msg), 100);
+  // }
+
+
+  int a =10;
+  int* buffer = (int *) malloc(a * sizeof (int)); // allocate memory for a=10 integers
+  if ( buffer != NULL) {
+     for (int i =0; i<a;i++) {
+          *(buffer+i) = i*2;
+      }
+    } 
+  int* arr = (int*) calloc(a, sizeof(int));
+
+  cout("For Buffer: ");
+  for (int i=0;i<a;i++) {
+    cout("%d ",*(buffer+i));
+  }
+
+  cout("\nFor Array: ");
+  if (arr != NULL) {
+  for(int i=0; i<a;i++) {
+    cout("%d ",*(arr+i));
+    }
+  }
+  cout("\nAllocate values for arr");
+  for(int i=0; i<a;i++) {
+    *(arr+i)=i+1;
+  }
+  cout("\nNew Values for arr: ");
+  for(int i=0; i<a;i++) {
+    cout("%d ",*(arr+i));
+  }
+
+  free(buffer);
+  free(arr);
+  buffer=NULL;
+  arr=NULL;
+  cout("\nMemory Deallocated");
+
+
 
   /* USER CODE END 2 */
 
@@ -110,6 +181,9 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+      // uint8_t* msg = (uint8_t*)"hello world\n";
+      // HAL_UART_Transmit(&huart2, msg, strlen((char*)msg), 100); 
+    //cout("Hello Worlds");
     
     /* USER CODE BEGIN 3 */
   }
