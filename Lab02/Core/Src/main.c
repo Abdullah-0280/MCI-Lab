@@ -62,6 +62,16 @@ static void MX_USB_PCD_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void myPrintf(const char* fmt, ...) {
+    char buffer[256]; 
+    va_list args;
+    va_start(args, fmt);
+    int l = vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    if (l > 0) {
+        HAL_UART_Transmit(&huart2, (uint8_t*)buffer, l, HAL_MAX_DELAY);
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -118,7 +128,7 @@ int main(void)
     //Task2
     int lhs=(a+b)*(a+b);
     int rhs= a*a + b*b + 2*a*b;
-    myPrintf("LHS=%d, RHS=%d",lhs,rhs);
+    myPrintf("LHS=%d, RHS=%d\r\n",lhs,rhs);
     HAL_Delay(100);
 
 
@@ -128,12 +138,12 @@ int main(void)
     for (int i=0; i< strlen(str);i++) {
       str[i]=str[i] + (key%256);
     }
-    myPrintf("Encrypted string: ",str);
+    myPrintf("Encrypted string: %s\r\n", str);
     HAL_Delay(100);
     for (int i=0; i<strlen(str);i++) {
       str[i]=str[i] - (key%256);
     }
-    myPrintf("Decrypted String: ",str);
+    myPrintf("Decrypted String: %s\r\n", str);
     HAL_Delay(100);
 
 

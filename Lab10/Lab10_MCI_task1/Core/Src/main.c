@@ -138,7 +138,7 @@ int main(void)
 
 
   int a =10;
-  int* buffer = (int *) malloc(a * sizeof (int)); // allocate memory for a=10 integers
+  int* buffer = (int *) malloc(a * sizeof (int)); 
   if ( buffer != NULL) {
      for (int i =0; i<a;i++) {
           *(buffer+i) = i*2;
@@ -146,22 +146,22 @@ int main(void)
     } 
   int* arr = (int*) calloc(a, sizeof(int));
 
-  cout("For Buffer: ");
+  cout("\rFor Buffer: ");
   for (int i=0;i<a;i++) {
     cout("%d ",*(buffer+i));
   }
 
-  cout("\nFor Array: ");
+  cout("\n\rFor Array: ");
   if (arr != NULL) {
   for(int i=0; i<a;i++) {
     cout("%d ",*(arr+i));
     }
   }
-  cout("\nAllocate values for arr");
+  cout("\n\rAllocate values for arr");
   for(int i=0; i<a;i++) {
     *(arr+i)=i+1;
   }
-  cout("\nNew Values for arr: ");
+  cout("\n\rNew Values for arr: ");
   for(int i=0; i<a;i++) {
     cout("%d ",*(arr+i));
   }
@@ -170,7 +170,7 @@ int main(void)
   free(arr);
   buffer=NULL;
   arr=NULL;
-  cout("\nMemory Deallocated");
+  cout("\n\rMemory Deallocated");
 
 
 
