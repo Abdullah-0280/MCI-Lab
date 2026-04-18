@@ -18,13 +18,15 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include <stdarg.h>
-#include <string.h>
-#include <stdint.h>
-#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+
+#include "stdarg.h"
+#include "stdio.h"
+#include "stm32f3xx_hal.h"
+#include <string.h>
+#include <math.h>
 
 /* USER CODE END Includes */
 
@@ -57,6 +59,12 @@ PCD_HandleTypeDef hpcd_USB_FS;
 
 /* USER CODE BEGIN PV */
 
+volatile float filtered_angle = 0.0f;
+volatile float raw_acc_angle = 0.0f;
+volatile float raw_gyro_rate = 0.0f;
+volatile uint8_t data_ready = 0;
+const float dt = 0.1f;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,40 +83,148 @@ static void MX_USART2_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void stop(){
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);
+/* ---- Configuration Parameters ---- */
+#define DT 0.01f                    // Complementary filter time step
+#define COMP_FILTER_ALPHA 0.98f     // Gyro weight 
 
-    uint32_t ARR = 999;
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1 , ARR - 0);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2 , ARR - 0);
+/* ---- Accelerometer Configuration ---- */
+#define LSM_ADDR_WRITE  0x32        // write address
+#define LSM_ADDR_READ   0x33        // read address
+#define CTRL_REG1_A     0x20        // Control register 1
+#define CTRL_REG4_A     0x23        // Control register 4
+#define OUT_X_L_A       0x28        // Output X low byte
+#define LSM_INIT_CTRL1  0x67        // 100Hz, all axes enabled
+#define LSM_INIT_CTRL4  0x00        // Normal mode
+#define ACC_SCALE       0.0039f     // 3.9 mg/digit scale factor
+
+/* ---- Gyroscope Configuration ---- */
+#define GYRO_CTRL_REG1  0x20        // Control register 1
+#define GYRO_OUT_X_L    0x28        // Output X low byte
+#define GYRO_INIT_CTRL1 0x8F        // 95Hz ODR, all axes enabled
+#define GYRO_SCALE      0.00875f    // 0.875 dps/digit scale factor
+#define SPI_READ_BIT    0x80        // SPI read mode bit
+#define SPI_AUTOINC_BIT 0x40        // SPI auto-increment bit
+
+/* ---- Calibration Parameters ---- */
+#define CALIB_SAMPLES   20          // Number of samples for offset calibration
+#define CALIB_DELAY_MS  10          // Delay between calibration samples
+#define ACC_Z_GRAVITY   1.0f        // Expected Z-axis acceleration at rest 
+
+typedef struct {
+    // Accelerometer 
+    int16_t acc_raw_x, acc_raw_y, acc_raw_z;
+    float acc_x, acc_y, acc_z;
+    float acc_x_offset, acc_y_offset, acc_z_offset;
+    
+    // Gyroscope
+    int16_t gyro_raw_x, gyro_raw_y, gyro_raw_z;
+    float gyro_x, gyro_y, gyro_z;
+    float gyro_x_offset, gyro_y_offset, gyro_z_offset;
+
+    // Filtered Angles
+    float angle_x; // Roll  
+    float angle_y; // Pitch
+} SensorData;
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+SensorData sens;
+
+//acclereometer init and read functions
+void Init_LSM(void) {
+    uint8_t ctrl1 = LSM_INIT_CTRL1;  // all axes enabled
+    HAL_I2C_Mem_Write(&hi2c1, LSM_ADDR_WRITE, CTRL_REG1_A, 1, &ctrl1, 1, HAL_MAX_DELAY);
+    
+    uint8_t ctrl4 = LSM_INIT_CTRL4;  // Normal mode configuration
+    HAL_I2C_Mem_Write(&hi2c1, LSM_ADDR_WRITE, CTRL_REG4_A, 1, &ctrl4, 1, HAL_MAX_DELAY);
 }
 
+void Read_LSM(void) {
+    uint8_t buffer[6];
+    HAL_I2C_Mem_Read(&hi2c1, LSM_ADDR_READ, OUT_X_L_A | 0x80, 1, buffer, 6, HAL_MAX_DELAY);
 
-void forward_motor(){
+    sens.acc_raw_x = (int16_t)((buffer[1] << 8) | buffer[0]);
+    sens.acc_raw_y = (int16_t)((buffer[3] << 8) | buffer[2]);
+    sens.acc_raw_z = (int16_t)((buffer[5] << 8) | buffer[4]);
+
+    // Convert raw to acceleration and apply offset
+    sens.acc_x = (sens.acc_raw_x * ACC_SCALE) - sens.acc_x_offset;
+    sens.acc_y = (sens.acc_raw_y * ACC_SCALE) - sens.acc_y_offset;
+    sens.acc_z = (sens.acc_raw_z * ACC_SCALE) - sens.acc_z_offset;
+}
+
+// gyro init and read functions
+void Init_Gyro(void) {
+    uint8_t tx[2] = {GYRO_CTRL_REG1, GYRO_INIT_CTRL1};
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);  // CS LOW
+    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);    // CS HIGH
+}
+
+void Read_Gyro(void) {
+    uint8_t tx = GYRO_OUT_X_L | 0x80 | 0x40;  // Read bit + auto-increment bit
+    uint8_t rx[6] = {0};
+
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, &tx, 1, HAL_MAX_DELAY);
+    HAL_SPI_Receive(&hspi1, rx, 6, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+
+    sens.gyro_raw_x = (int16_t)((rx[1] << 8) | rx[0]);
+    sens.gyro_raw_y = (int16_t)((rx[3] << 8) | rx[2]);
+    sens.gyro_raw_z = (int16_t)((rx[5] << 8) | rx[4]);
+
+    // Convert raw to angular velocity (dps) and apply offset
+    sens.gyro_x = (sens.gyro_raw_x * GYRO_SCALE) - sens.gyro_x_offset;
+    sens.gyro_y = (sens.gyro_raw_y * GYRO_SCALE) - sens.gyro_y_offset;
+    sens.gyro_z = (sens.gyro_raw_z * GYRO_SCALE) - sens.gyro_z_offset;
+}
+
+void Offset_Sensors(void) {
+    // Initialize accumulator variables
+    float sum_ax = 0.0f, sum_ay = 0.0f, sum_az = 0.0f;
+    float sum_gx = 0.0f, sum_gy = 0.0f, sum_gz = 0.0f;
+
+    // Collect multiple samples for averaging
+    for (uint8_t i = 0; i < CALIB_SAMPLES; i++) {
+        Read_LSM();
+        Read_Gyro();
+
+        sum_ax += sens.acc_x;
+        sum_ay += sens.acc_y;
+        sum_az += (sens.acc_z - ACC_Z_GRAVITY);  // Remove gravity offset from Z
+
+        sum_gx += sens.gyro_x;
+        sum_gy += sens.gyro_y;
+        sum_gz += sens.gyro_z;
+
+        HAL_Delay(CALIB_DELAY_MS);
+    }
+
+    // Calculate and store average offsets
+    float scale = 1.0f / CALIB_SAMPLES;
+    sens.acc_x_offset = sum_ax * scale;
+    sens.acc_y_offset = sum_ay * scale;
+    sens.acc_z_offset = sum_az * scale;
     
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);
+    sens.gyro_x_offset = sum_gx * scale;
+    sens.gyro_y_offset = sum_gy * scale;
+    sens.gyro_z_offset = sum_gz * scale;
+}
 
-    uint32_t ARR = 999;
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1 , ARR );
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2 , ARR );
-  }
-  void backward_motor(){
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_RESET);
+void Calculate_Angle(void) {
+    // Calculate tilt angles from accelerometer
+    float acc_angle_x = atan2f(sens.acc_y, sens.acc_z) * (180.0f / 3.14159f); 
+    float acc_angle_y = atan2f(-sens.acc_x, sqrtf(sens.acc_y * sens.acc_y + sens.acc_z * sens.acc_z)) * (180.0f / 3.14159f);
 
-    uint32_t ARR = 999;
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1 , ARR - 700);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2 , ARR - 700);
-  }
-
+    float gyro_weight = COMP_FILTER_ALPHA;
+    float acc_weight = 1.0f - gyro_weight;
+    
+    sens.angle_x = gyro_weight * (sens.angle_x + (sens.gyro_x * DT)) + acc_weight * acc_angle_x;
+    sens.angle_y = gyro_weight * (sens.angle_y + (sens.gyro_y * DT)) + acc_weight * acc_angle_y;
+}
 
 void cout(const char *fmt, ...) {
     char buffer[128]; 
@@ -121,43 +237,16 @@ void cout(const char *fmt, ...) {
     }
 }
 
-
-void measure_motor_speed(void) {
-    uint32_t ticks = 0;
-    float frequency = 0.0f;
-    float rpm = 0.0f;
-    
-    
-    const float PPR = 330.0f; 
-
-    while(HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_3) == GPIO_PIN_RESET);
-    
-    while(HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_3) == GPIO_PIN_SET);
-    
-    __HAL_TIM_SET_COUNTER(&htim2, 0); 
-    HAL_TIM_Base_Start(&htim2);
-
-    while(HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_3) == GPIO_PIN_RESET);
-
-    while(HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_3) == GPIO_PIN_SET);
-    
-    HAL_TIM_Base_Stop(&htim2);
-    ticks = __HAL_TIM_GET_COUNTER(&htim2);
-
-    if(ticks > 0) {
-        frequency = 48000000.0f / (float)ticks;
-        rpm = (frequency * 60.0f) / PPR;
-        cout("Freq: %d Hz | RPM: %d\r\n",(int)frequency, (int)rpm);
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+      if (htim->Instance == TIM2) { 
+        Read_LSM();
+        Read_Gyro();
+        Calculate_Angle();
+        data_ready = 1;
     }
 }
 
 
-/* USER CODE END 0 */
-
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
 int main(void)
 {
 
@@ -196,8 +285,6 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   // Startt PWM for both motors
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);  // Left motor PWM (D9)
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);  // Right motor PWM (D10)
   
   // Set initial direction: FORWARD
   // D12 = HIGH, D8 = LOW for right motor forward
@@ -207,38 +294,32 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  /* USER CODE BEGIN 2 */
-  // Start PWM for both motors
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);  
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);  
-  
-  // Set motor to spin forward so the encoder actually turns
-  // backward_motor();
-  /* USER CODE END 2 */
-
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_RESET);
 
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2 , 400);
+  HAL_TIM_Base_Start_IT(&htim2); 
+  /* USER CODE BEGIN 2 */
+  Init_LSM();
+  Init_Gyro();
+  Offset_Sensors(); 
+  
+  __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE); // Clear flag 
+  HAL_TIM_Base_Start_IT(&htim2); 
+  /* USER CODE END 2 */
 
+    while (1) {
+         if (data_ready) {
+            int ax_i = (int)sens.angle_x;
+            int ax_f = (int)(fabsf(sens.angle_x - ax_i) * 100);
+            int ay_i = (int)sens.angle_y;
+            int ay_f = (int)(fabsf(sens.angle_y - ay_i) * 100);
+            cout("Roll: %d.%02d deg, Pitch: %d.%02d deg\r\n", ax_i, ax_f, ay_i, ay_f);
+            data_ready = 0;
+            HAL_Delay(100);
+        }
+        
+    }
 
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
-
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1 , 400);
-
-
-
-      measure_motor_speed();
-      HAL_Delay(250); // Small delay to prevent flooding the serial terminal
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-  }
   /* USER CODE END 3 */
 }
 
@@ -359,17 +440,17 @@ static void MX_SPI1_Init(void)
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi1.Init.CRCPolynomial = 7;
   hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
   if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
@@ -399,9 +480,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 719;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -574,7 +655,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2|GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13|GPIO_PIN_15, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_RESET);
@@ -614,8 +695,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_15;
+  /*Configure GPIO pins : PB13 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
