@@ -14,7 +14,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32f3xx_hal.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -59,8 +58,8 @@ typedef struct {
 
 // PID Gains
 #define KP  30.0f
-#define KI  0.50f
-#define KD 2.0f
+#define KI  0.00f
+#define KD 0.0f
 
 // Setpoint
 #define SETPOINT -2.1f
@@ -130,6 +129,20 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+
+uint8_t I3G_ReadReg(uint8_t reg_addr) {
+    uint8_t tx_data = reg_addr | 0x80;  // Bit 7 = 1 for READ
+    uint8_t rx_data;
+
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, &tx_data, 1, HAL_MAX_DELAY);
+    HAL_SPI_Receive(&hspi1, &rx_data, 1, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+
+    return rx_data;
+}
+
 
 // Helper Functions for Sensor Data Acquisition
 
@@ -215,17 +228,6 @@ void I3G_WriteReg(uint8_t reg_addr, uint8_t data) {
     HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);   // CS HIGH
 }
 
-uint8_t I3G_ReadReg(uint8_t reg_addr) {
-    uint8_t tx_data = reg_addr | 0x80;  // Bit 7 = 1 for READ
-    uint8_t rx_data;
-
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
-    HAL_SPI_Transmit(&hspi1, &tx_data, 1, HAL_MAX_DELAY);
-    HAL_SPI_Receive(&hspi1, &rx_data, 1, HAL_MAX_DELAY);
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
-
-    return rx_data;
-}
 
 /* 
  *  Motor Control Functions
@@ -247,23 +249,53 @@ uint8_t I3G_ReadReg(uint8_t reg_addr) {
  *    Brake/Stop:     IN1=LOW,  IN2=LOW
  */
 
+
+
+
 void Motor_Left_Forward(uint16_t speed) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);    // IN1 = HIGH
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);  // IN2 = LOW
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);    // IN1 = HIGH
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);  // IN2 = LOW
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
 }
 
 void Motor_Left_Backward(uint16_t speed) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);  // IN1 = LOW
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);    // IN2 = HIGH
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);  // IN1 = LOW
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);    // IN2 = HIGH
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
 } 
+
+// void Motor_Left_Forward(uint16_t speed) {
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);    // IN1 = HIGH
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);  // IN2 = LOW
+//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
+// }
+
+// void Motor_Left_Backward(uint16_t speed) {
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);  // IN1 = LOW
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);    // IN2 = HIGH
+//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
+// } 
 
 void Motor_Left_Stop(void) {
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
 }
+
+// void Motor_Right_Forward(uint16_t speed) {
+//     // SWAP THESE: Original was SET then RESET
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // IN1 = LOW
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);   // IN2 = HIGH
+//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
+// }
+
+// void Motor_Right_Backward(uint16_t speed) {
+//     // SWAP THESE: Original was RESET then SET
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);   // IN1 = HIGH
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET); // IN2 = LOW
+//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
+// }
+
 
 void Motor_Right_Forward(uint16_t speed) {
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);    // IN1 = HIGH
@@ -330,13 +362,12 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
   PIDController pid_controller;
-
   /* USER CODE END 1 */
 
   /* MCU Configuration*/
   HAL_Init();
   SystemClock_Config();
-  
+
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
@@ -346,35 +377,28 @@ int main(void)
   MX_TIM2_Init();
   MX_USART2_UART_Init();
 
-  // Initialize PID Controller 
-  PID_Init(&pid_controller);
-
-  // Initialize Gyroscope
-  I3G_WriteReg(0x20, 0x4F);  
-
-  // Initialize Accelerometer
+  /* USER CODE BEGIN 2 */
+  // 1. Initialize Sensors
+  I3G_WriteReg(0x20, 0x4F); // Gyro on
   uint8_t acc_init[2] = {0x20, 0x57}; 
-  HAL_I2C_Master_Transmit(&hi2c1, ACC_ADDRESS_WRITE, acc_init, 2, 50);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x32, acc_init, 2, 50);
 
-  // Start PWM on both channels for motor speed control
+  // 2. Start PWM
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
-  // Set initial PWM to 0
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0);
-
-  // TIM2 interrupt
+  // 3. Start Timer Interrupt
   HAL_TIM_Base_Start_IT(&htim2);
-
-  // Small delay 
-  HAL_Delay(100);
+  /* USER CODE END 2 */
 
   /* Infinite loop */
   while (1)
   {
-    if (display_flag == 1) {
+    if (display_flag == 1) 
+    {
       display_flag = 0;
+      
+      // Calculate float parts for printing
       int angle_i = (int)shared_angle;
       int angle_f = (int)(fabsf(shared_angle - angle_i) * 100);
       int acc_i = (int)acc_angle;
@@ -383,12 +407,14 @@ int main(void)
       int gyro_f = (int)(fabsf(gyro_rate - gyro_i) * 100);
       int pid_i = (int)shared_pid_out;
       int pid_f = (int)(fabsf(shared_pid_out - pid_i) * 100);
+
       cout("%d.%02d,%d.%02d,%d.%02d,%d.%02d\r\n", 
            angle_i, angle_f, acc_i, acc_f, gyro_i, gyro_f, pid_i, pid_f);
     }
-  }
+    /* USER CODE BEGIN 3 */
+  } 
   /* USER CODE END 3 */
-}
+} // End of main
 
 /**
   * @brief System Clock Configuration
