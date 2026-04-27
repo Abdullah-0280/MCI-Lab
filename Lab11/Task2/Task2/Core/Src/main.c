@@ -5,7 +5,7 @@
   * @brief          : Lab 11 Task 2 - PID Controller for Self-Balancing Robot
   ******************************************************************************
   * TIM2 = 200Hz control loop ISR (complementary filter + PID)
-  * TIM3 = PWM generation for motors (CH1=left on PC6, CH2=right on PA4)
+  * TIM3 = PWM generation for motors (CH1=left on PB4, CH2=right on PA4)
   * Motor direction pins:
   *   Left  motor: PB12 (IN1), PB13 (IN2)
   *   Right motor: PB14 (IN1), PB15 (IN2)
@@ -13,8 +13,8 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
-#include "../Inc/main.h"
-#include "../../USB_DEVICE/App/usb_device.h"
+#include "main.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -57,9 +57,9 @@ typedef struct {
 } AngleEstimate;
 
 // PID Gains
-#define KP  20.0f
-#define KI  0.0f
-#define KD 0.0f
+#define KP  80.0f
+#define KI  0.08f
+#define KD 2.10f
 
 // Setpoint
 #define SETPOINT 0.0f
@@ -68,7 +68,13 @@ typedef struct {
 #define ACC_CALIBRATION_OFFSET  0.0f
 
 // Upright deadband in degrees. Inside this band, stop the motors.
-#define BALANCE_DEADBAND_DEG  0.0f
+#define BALANCE_DEADBAND_DEG  0.2f
+
+// Motor matching and anti-creep settings
+#define MOTOR_CMD_DEADZONE     25.0f   // PID command below this is treated as zero
+#define MOTOR_MIN_START_PWM    90u     // Overcome static friction
+#define LEFT_MOTOR_GAIN        1.00f
+#define RIGHT_MOTOR_GAIN       1.15f   // Right wheel boost (was slower)
 
 // Output Limits
 #define PID_OUT_MAX  999.0f
@@ -257,7 +263,7 @@ void I3G_WriteReg(uint8_t reg_addr, uint8_t data) {
  * 
  *
  *  Left Motor:
- *    PWM  -> TIM3_CH1 (PC6)   => Shield pin D9
+ *    PWM  -> TIM3_CH1 (PB4)
  *    IN1  -> PB12              => Shield pin D6
  *    IN2  -> PB13              => Shield pin D7
  *
@@ -275,29 +281,29 @@ void I3G_WriteReg(uint8_t reg_addr, uint8_t data) {
 
 
 
-void Motor_Left_Forward(uint16_t speed) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);    // IN1 = HIGH
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);  // IN2 = LOW
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
-}
-
-void Motor_Left_Backward(uint16_t speed) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);  // IN1 = LOW
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);    // IN2 = HIGH
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
-} 
-
 // void Motor_Left_Forward(uint16_t speed) {
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);    // IN1 = HIGH
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);  // IN2 = LOW
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);    // IN1 = HIGH
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);  // IN2 = LOW
 //     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
 // }
 
 // void Motor_Left_Backward(uint16_t speed) {
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);  // IN1 = LOW
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);    // IN2 = HIGH
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);  // IN1 = LOW
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);    // IN2 = HIGH
 //     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
 // } 
+
+void Motor_Left_Forward(uint16_t speed) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);    // IN1 = HIGH
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);  // IN2 = LOW
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
+}
+
+void Motor_Left_Backward(uint16_t speed) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);  // IN1 = LOW
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);    // IN2 = HIGH
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
+} 
 
 void Motor_Left_Stop(void) {
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
@@ -305,31 +311,31 @@ void Motor_Left_Stop(void) {
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
 }
 
-// void Motor_Right_Forward(uint16_t speed) {
-//     // SWAP THESE: Original was SET then RESET
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // IN1 = LOW
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);   // IN2 = HIGH
-//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
-// }
-
-// void Motor_Right_Backward(uint16_t speed) {
-//     // SWAP THESE: Original was RESET then SET
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);   // IN1 = HIGH
-//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET); // IN2 = LOW
-//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
-// }
-
-
 void Motor_Right_Forward(uint16_t speed) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);    // IN1 = HIGH
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);  // IN2 = LOW
+    // SWAP THESE: Original was SET then RESET
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // IN1 = LOW
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);   // IN2 = HIGH
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
 }
 
 void Motor_Right_Backward(uint16_t speed) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);  // IN1 = LOW
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);    // IN2 = HIGH
+    // SWAP THESE: Original was RESET then SET
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);   // IN1 = HIGH
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET); // IN2 = LOW
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
+// }
+
+
+// void Motor_Right_Forward(uint16_t speed) {
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);    // IN1 = HIGH
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);  // IN2 = LOW
+//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
+// }
+
+// void Motor_Right_Backward(uint16_t speed) {
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);  // IN1 = LOW
+//     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);    // IN2 = HIGH
+//     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, speed);
 }
 
 void Motor_Right_Stop(void) {
@@ -338,23 +344,46 @@ void Motor_Right_Stop(void) {
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0);
 }
 
+static uint16_t Scale_Motor_PWM(float base_pwm, float gain) {
+  float pwm = base_pwm * gain;
+
+  if (pwm > 0.0f && pwm < (float)MOTOR_MIN_START_PWM) {
+    pwm = (float)MOTOR_MIN_START_PWM;
+  }
+
+  if (pwm > PID_OUT_MAX) {
+    pwm = PID_OUT_MAX;
+  }
+
+  return (uint16_t)pwm;
+}
+
+void Motors_Stop(void) {
+  Motor_Left_Stop();
+  Motor_Right_Stop();
+}
+
 void Motors_Drive(float pid_output) {
-    uint16_t pwm_magnitude = (uint16_t)fabsf(pid_output);
-    
-    // Clamp to maximum PWM value
-    if (pwm_magnitude > (uint16_t)PID_OUT_MAX) {
-        pwm_magnitude = (uint16_t)PID_OUT_MAX;
+  float cmd = fabsf(pid_output);
+
+  // Suppress tiny commands that cause one-wheel creeping near upright.
+  if (cmd < MOTOR_CMD_DEADZONE) {
+    Motors_Stop();
+    return;
     }
+
+  uint16_t left_pwm = Scale_Motor_PWM(cmd, LEFT_MOTOR_GAIN);
+  uint16_t right_pwm = Scale_Motor_PWM(cmd, RIGHT_MOTOR_GAIN);
 
     if (pid_output > 0.0f) {
         // Positive output: drive forward
-        Motor_Left_Forward(pwm_magnitude);
-        Motor_Right_Forward(pwm_magnitude);
+    Motor_Left_Forward(left_pwm);
+    Motor_Right_Forward(right_pwm);
     }
     else if (pid_output < 0.0f) {
         // Negative output: drive backward
-        Motor_Left_Backward(pwm_magnitude);
-        Motor_Right_Backward(pwm_magnitude);
+    Motor_Left_Backward(left_pwm);
+    Motor_Right_Backward(right_pwm);
     }
     else {
         // Zero output: stop motors
@@ -363,10 +392,7 @@ void Motors_Drive(float pid_output) {
     }
 }
 
-  void Motors_Stop(void) {
-    Motor_Left_Stop();
-    Motor_Right_Stop();
-  }
+
 
 void cout(const char *fmt, ...) {
     char buffer[128]; 
@@ -481,6 +507,72 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+    /*After i did some fixing, the motor problem is resolved. It turned out to be a wiring issue as i connected the wire to PA2 in place of PA4. Now time to balance this, give values for kp, ki and kd, give a strategy to start tuning and changing values. I also want to add a new funcitonality in this as this another part of the project. My friend is adding encoder to print values, one is adding bluetooth, i was thinking to add a mathematical filter for our values or for kp, ki and kd, or some automation in it of some sort. Give your take and our strategy on adding new functionality and tell me what you think we should add, disscuss about all.
+
+I’m not changing code here; this is a tuning and project-direction pass. I’ll ground it in your current PID structure and suggest the most useful add-on that doesn’t overlap with encoders or Bluetooth.
+
+For a self-balancing robot, I would start from a mostly PD controller and treat integral as a correction term, not a primary stabilizer. In your current main.c, a good starting point is:
+
+Kp: 55 to 80
+Ki: 0.00 to 0.08
+Kd: 1.0 to 2.5
+If you want a single concrete starting point, use Kp = 70, Ki = 0.02, Kd = 1.4. That is close enough to get motion, but still safe to tune down if it oscillates.
+
+The tuning order should be:
+
+Set Ki = 0 and Kd = 0 first.
+Increase Kp until the robot just starts to oscillate or react too aggressively.
+Back Kp off about 20 to 30 percent.
+Add Kd until the oscillation is damped and the robot stops “hunting” around upright.
+Add a very small Ki only if it still slowly drifts away from upright even when Kp and Kd are good.
+Tune one gain at a time and test only one change per run.
+A practical rule:
+
+Too slow or falls over without enough correction: raise Kp.
+Overshoots and rocks back and forth: raise Kd.
+Slowly leans away from center even though it is reacting: add a little Ki.
+If Ki makes it wobble or “wind up,” reduce it immediately.
+For your extra project functionality, I would not add another filter just on kp, ki, or kd. That is not very meaningful unless you are doing online adaptive control. Also, you already have a complementary filter for the angle estimate, so another generic filter on the same value is a bit redundant.
+
+What I think is best:
+
+Best overall addition: adaptive gain scheduling.
+Best demo addition: Bluetooth telemetry plus live gain tuning.
+Best academically strong addition: auto-tuning routine.
+My recommendation is this:
+
+Keep encoder and Bluetooth for your teammates.
+You add adaptive gain scheduling with filtered derivative or an auto-tuning helper.
+Why that is the best fit:
+
+It is genuinely control-related, not just logging.
+It complements the encoder data very well.
+It gives you a real “extra functionality” section in the project report.
+It is easier to justify than a second sensor filter.
+Good options in order of value:
+
+Adaptive gain scheduling: use one set of gains near upright and a more aggressive set when the tilt angle gets larger.
+Filtered derivative term: low-pass filter the error derivative before applying Kd, which reduces noise and motor chatter.
+Auto-tuning assistant: run a short test routine at startup or on button press to estimate a rough Kp/Kd pair, then apply them.
+Live Bluetooth tuning: send new gain values from a phone or terminal and update them while testing.
+What I would choose for your project:
+
+If you want the strongest control-system feature, do adaptive gain scheduling.
+If you want the easiest useful feature, do Bluetooth live tuning.
+If you want the most “smart” feature, do auto-tuning.
+If you want the most stable and practical improvement, do filtered derivative plus adaptive gain scheduling.
+My honest take:
+
+A second angle filter alone is not a strong standalone feature.
+A filter on the derivative term is useful, but by itself it is a support feature, not the main feature.
+Adaptive gain scheduling is the best balance of usefulness, originality, and implementation difficulty.
+If you want, I can next help you design:
+
+A tuning checklist for your robot in the lab.
+An adaptive gain schedule with exact angle thresholds.
+A simple auto-tuning routine you can add to main.c.*/
+
     if (display_flag) {
       display_flag = 0;
 
@@ -741,8 +833,8 @@ static void MX_TIM3_Init(void)
 
   // ✨ INSERT THIS BLOCK RIGHT HERE ✨
   // Enable the alternate function clock and set the remap for TIM3
-  __HAL_RCC_AFIO_CLK_ENABLE();
-  GPIO_PinRemapConfig(GPIO_PartialRemap_TIM3, ENABLE);
+  // __HAL_RCC_AFIO_CLK_ENABLE();
+  // GPIO_PinRemapConfig(GPIO_PartialRemap_TIM3, ENABLE);
   // **** END OF INSERTED BLOCK ****
 
   
@@ -912,6 +1004,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     // Apply deadband - stop motors for very small errors
     if (fabsf(error) <= BALANCE_DEADBAND_DEG) {
         pid_output = 0.0f;
+      pid_ctrl.integral = 0.0f;
+      pid_ctrl.prev_error = 0.0f;
         Motors_Stop();
     } else {
         // Limit output for safety
